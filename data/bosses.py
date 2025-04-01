@@ -170,7 +170,6 @@ normal_enemy_name = {
     365 : "Phunbaba 4",
     256 : "Whelk",
     257 : "Presenter",
-    361 : "Naughty",
     292 : "KatanaSoul",
     308 : "Head",
     259 : "Vargas",

@@ -7,6 +7,7 @@ from data.enemy_zones import EnemyZones
 from data.enemy_scripts import EnemyScripts
 import data.bosses as bosses
 
+
 class Enemies():
     DATA_START = 0xf0000
     DATA_END = 0xf2fff
@@ -37,12 +38,14 @@ class Enemies():
         self.enemy_data = DataArray(self.rom, self.DATA_START, self.DATA_END, self.DATA_SIZE)
         self.enemy_name_data = DataArray(self.rom, self.NAMES_START, self.NAMES_END, self.NAME_SIZE)
         self.enemy_item_data = DataArray(self.rom, self.ITEMS_START, self.ITEMS_END, self.ITEMS_SIZE)
-        self.enemy_special_name_data = DataArray(self.rom, self.SPECIAL_NAMES_START, self.SPECIAL_NAMES_END, self.SPECIAL_NAMES_SIZE)
+        self.enemy_special_name_data = DataArray(self.rom, self.SPECIAL_NAMES_START, self.SPECIAL_NAMES_END,
+                                                 self.SPECIAL_NAMES_SIZE)
 
         self.enemies = []
         self.bosses = []
         for enemy_index in range(len(self.enemy_data)):
-            enemy = Enemy(enemy_index, self.enemy_data[enemy_index], self.enemy_name_data[enemy_index], self.enemy_item_data[enemy_index], self.enemy_special_name_data[enemy_index])
+            enemy = Enemy(enemy_index, self.enemy_data[enemy_index], self.enemy_name_data[enemy_index],
+                          self.enemy_item_data[enemy_index], self.enemy_special_name_data[enemy_index])
             self.enemies.append(enemy)
 
             if enemy_index in bosses.enemy_name and enemy_index not in bosses.removed_enemy_name:
@@ -131,9 +134,9 @@ class Enemies():
         hp2x = ["Ipooh", "GhostTrain", "Kefka (Narshe)", "Dadaluma", "Ifrit", "Shiva", "Number 024",
                 "Number 128", "Left Blade", "Right Blade", "Left Crane", "Right Crane", "Nerapa"]
 
-        if not self.args.boss_normalize_distort_stats:
-            # double opera ultros' hp only if not already normalized
-            # each form (location) has different hp pools so it is already challenging enough after the normalize
+        if not self.args.balance_boss_stats:
+            # double opera ultros' hp only if not already rebalanced
+            # each form (location) has different hp pools so it is already challenging enough after the rebalance
             hp2x.append("Ultros 2")
 
         for boss_id, boss_name in bosses.enemy_name.items():
@@ -150,63 +153,287 @@ class Enemies():
         for enemy_id, exp in custom_exp.items():
             self.enemies[enemy_id].exp = exp * self.enemies[enemy_id].level
 
-    def boss_normalize_distort_stats(self):
-        import random
-
-        def stat_min_max(stat_value, min_possible, max_possible):
-            distortion_percent = 0.25
-            stat_distortion_amount = int(stat_value * distortion_percent)
-
-            # if distortion_percent can potentially set value outside allowed range
-            # then set the distortion to the max amount allowable
-            if stat_value - stat_distortion_amount < min_possible:
-                stat_distortion_amount = stat_value
-            elif stat_value + stat_distortion_amount > max_possible:
-                stat_distortion_amount = max_possible - stat_value
-
-            stat_min = stat_value - stat_distortion_amount
-            stat_max = stat_value + stat_distortion_amount
-
-            return stat_min, stat_max
-
-        stats = ["speed", "vigor", "accuracy", "evasion", "magic_evasion", "defense", "magic_defense", "magic"]
-        min_stat_max = [70, 24, 100, 0, 0, 150, 160, 16] # minimum values for maximum random values
+    def boss_rebalance_stats(self):
+        stats = ["speed", "vigor", "defense", "magic_defense", "magic"]
+        baseline_stats = [50, 60, 135, 155, 10]  # baseline values to rebalance around
 
         for enemy in self.bosses:
             for stat_index, stat in enumerate(stats):
                 stat_value = getattr(enemy, stat)
-                stat_min, stat_max = stat_min_max(stat_value, 0, 2**8 - 1)
 
-                if stat_max < min_stat_max[stat_index]:
-                    # max rand value is lower than the minimum for this stat, increase it to the minimum
-                    stat_max = min_stat_max[stat_index]
+                if stat_value < baseline_stats[stat_index]:
+                    rebalanced_stat = int((baseline_stats[stat_index] + stat_value) / 2)
+                else:
+                    rebalanced_stat = stat_value
 
-                setattr(enemy, stat, random.randint(stat_min, stat_max))
+                setattr(enemy, stat, rebalanced_stat)
+                print(f"DEBUG: Normalizing {enemy.name}'s {stat} to {rebalanced_stat} (was {stat_value})")
 
-        stats = ["hp", "mp"]
+    def boss_rebalance_hpmp(self):
+        # Exclude "child" bosses from HP rebalancing
+        hp_mp_exclude = [321, 322, 320, 319, 325, 327, 269, 316, 317, 318, 333, 294, 352, 353, 354, 288, 289, 359, 326,
+                         340]
+        hp_mp_parents = {
+            268: [321, 322],
+            267: [319, 320],
+            275: [325, 327],
+            270: [269],
+            283: [316, 317, 318],
+            259: [333],
+            291: [294, 352, 353, 354],
+            287: [288, 289],
+            290: [359]
+        }
+
+        baseline_hp = 650
+        baseline_mp = 230
+
+        # Create a reverse mapping of child to parent
+        child_to_parent = {child: parent for parent, children in hp_mp_parents.items() for child in children}
+
+        # Store rebalancing factors for parents
+        parent_rebalancing = {}
+
+        # First Pass: Process all non-excluded bosses and parents
         for enemy in self.bosses:
-            hp_min, hp_max = stat_min_max(enemy.hp, 0, 2**16 - 1)
-            mp_min, mp_max = stat_min_max(enemy.mp, 0, 2**16 - 1)
+            if enemy.id not in hp_mp_exclude:
+                # Normalize HP and MP for non-excluded enemies (including parents)
+                if enemy.hp < (enemy.level * baseline_hp):
+                    rebalanced_hp = int(((baseline_hp * enemy.level) + enemy.hp) / 2)
+                else:
+                    rebalanced_hp = enemy.hp
 
-            # minimum hp/mp max values based on mean (hp / level) and mean (mp / level) of bosses
-            # cap the max at triple the original hp/mp
-            min_hp_max = min(enemy.level * 500, enemy.hp * 3)
-            min_mp_max = min(enemy.level * 150, enemy.mp * 3)
+                if enemy.mp < (enemy.level * baseline_mp):
+                    rebalanced_mp = int(((baseline_mp * enemy.level) + enemy.mp) / 2)
+                else:
+                    rebalanced_mp = enemy.mp
 
-            if hp_max < min_hp_max:
-                hp_max = min_hp_max
-            if mp_max < min_mp_max:
-                mp_max = min_mp_max
+                # Store rebalancing factors for parent bosses
+                if enemy.id in hp_mp_parents:
+                    hp_multiplier = rebalanced_hp / enemy.hp if enemy.hp > 0 else 1
+                    mp_multiplier = rebalanced_mp / enemy.mp if enemy.mp > 0 else 1
+                    parent_rebalancing[enemy.id] = (rebalanced_hp, hp_multiplier, rebalanced_mp, mp_multiplier)
+                    print(
+                        f"Parent {enemy.name} (ID {enemy.id}) rebalancing: HP x{hp_multiplier}, MP x{mp_multiplier}")
 
-            enemy.hp = random.randint(hp_min, hp_max)
-            enemy.mp = random.randint(mp_min, mp_max)
+                # Apply rebalanced values
+                print(
+                    f"DEBUG: {enemy.name}'s HP rebalanced to {rebalanced_hp} (was {enemy.hp}), MP rebalanced to {rebalanced_mp} (was {enemy.mp})")
+                setattr(enemy, "hp", rebalanced_hp)
+                setattr(enemy, "mp", rebalanced_mp)
+
+
+        # Second Pass: Process child bosses based on their parent's rebalancing
+        for enemy in self.bosses:
+            if enemy.id in hp_mp_exclude:
+                parent_id = child_to_parent.get(enemy.id)
+                # Exception case for Ipooh (sets his HP to always be 50% of Vargas's HP)
+                if enemy.id == 333:
+                    if parent_id in parent_rebalancing:
+                        parent_rebalanced_hp = parent_rebalancing[parent_id][0]
+                        rebalanced_hp = int(parent_rebalanced_hp / 2)
+                        rebalanced_mp = enemy.mp  # Keep MP as is
+                        print(
+                            f"Special Case: Child {enemy.name} (ID {enemy.id}) HP set to 50% of parent's (ID {parent_id}) HP")
+
+                elif parent_id in parent_rebalancing:
+                    _, hp_multiplier, _, mp_multiplier = parent_rebalancing[parent_id]
+                    rebalanced_hp = int(enemy.hp * hp_multiplier)
+                    rebalanced_mp = int(enemy.mp * mp_multiplier)
+                    print(
+                        f"Child {enemy.name} (ID {enemy.id}) inherits parent's (ID {parent_id}) rebalancing: HP x{hp_multiplier}, MP x{mp_multiplier}")
+                else:
+                    rebalanced_hp, rebalanced_mp = enemy.hp, enemy.mp
+                    print(f"No HP adjustment applied on child enemy: {enemy.name} (ID {enemy.id})")
+
+                # Apply rebalanced values
+                setattr(enemy, "hp", rebalanced_hp)
+                setattr(enemy, "mp", rebalanced_mp)
+                print(f"DEBUG: {enemy.name}'s HP rebalanced to {rebalanced_hp}, MP rebalanced to {rebalanced_mp}")
+
+    def boss_stats_randomize(self):
+        import random
+
+        # Exclude "child" bosses from HP distortion
+        bosses_exclude = [321, 322, 320, 319, 325, 327, 269, 316, 317, 318, 333, 294, 352, 353, 354, 288, 289, 359, 326,
+                         340]
+        bosses_parents = {
+            268: [321, 322],
+            267: [319, 320],
+            275: [325, 327],
+            270: [269],
+            283: [316, 317, 318],
+            259: [333],
+            291: [294, 352, 353, 354],
+            287: [288, 289],
+            290: [359]
+        }
+
+        # Map child IDs to their parent
+        child_to_parent = {child: parent for parent, children in bosses_parents.items() for child in children}
+
+        # Define stats to distort
+        stats = ["speed", "vigor", "defense", "magic_defense", "magic"]
+
+        # Store distortion factors for parent bosses
+        distortion_factors = {}
+
+        if self.args.boss_stats_random_percent_min != 100 or self.args.boss_stats_random_percent_max != 100:
+            # First Pass: Distort stats for non-excluded and parent bosses
+            for enemy in self.bosses:
+                if enemy.id not in bosses_exclude:
+                    distortion_factors[enemy.id] = {}
+                    for stat in stats:
+                        stat_value = getattr(enemy, stat)
+                        if stat_value != 0:
+                            # Apply random distortion
+                            boss_stat_percent = random.randint(
+                                self.args.boss_stats_random_percent_min,
+                                self.args.boss_stats_random_percent_max
+                            ) / 100.0
+                            value = int(stat_value * boss_stat_percent)
+                            distorted_stat = max(min(value, 255), 0)
+                            setattr(enemy, stat, distorted_stat)
+
+                            # Record the distortion factor
+                            distortion_factors[enemy.id][stat] = boss_stat_percent
+                            print(f"DEBUG: Distorting {enemy.name}'s {stat} to {distorted_stat} (was {stat_value})")
+
+            # Second Pass: Apply parent distortion factors to child bosses
+            for enemy in self.bosses:
+                if enemy.id in child_to_parent:
+                    parent_id = child_to_parent[enemy.id]
+                    if parent_id in distortion_factors:
+                        for stat in stats:
+                            stat_value = getattr(enemy, stat)
+                            if stat_value != 0:
+                                # Apply parent's distortion factor
+                                parent_factor = distortion_factors[parent_id].get(stat, 1.0)
+                                value = int(stat_value * parent_factor)
+                                distorted_stat = max(min(value, 255), 0)
+                                setattr(enemy, stat, distorted_stat)
+                                print(f"DEBUG: Child {enemy.name}'s {stat} distorted to {distorted_stat} "
+                                      f"using parent's (ID {parent_id}) factor {parent_factor:.2f}")
+
+        '''stats = ["speed", "vigor", "defense", "magic_defense", "magic"]
+        bosses_exclude = ["Speck", "Piranha"]
+        if self.args.boss_stats_random_percent_min != 100 or self.args.boss_stats_random_percent_max != 100:
+            for enemy in self.bosses:
+                for stat in stats:
+                    stat_value = getattr(enemy, stat)
+                    if stat_value != 0:
+                        boss_stat_percent = random.randint(self.args.boss_stats_random_percent_min,
+                                                           self.args.boss_stats_random_percent_max) / 100.0
+                        value = int(stat_value * boss_stat_percent)
+                        distorted_stat = max(min(value, 255), 0)
+                        setattr(enemy, stat, distorted_stat)
+                        print(f"DEBUG: Distorting {enemy.name}'s {stat} to {distorted_stat} (was {stat_value})")
+
+            if enemy.name in hp_mp_exclude:
+                print(f"No HP adjustment applied on enemy: {enemy.name}")
+                distorted_hp = getattr(enemy, "hp")
+            else:
+                base_hp = getattr(enemy, "hp")
+                distorted_hp = int(max(1, min(base_hp * random.randint(self.args.boss_distort_stats_percent_min,
+                                                                   self.args.boss_distort_stats_percent_max) / 100.0,
+                                          2 ** 16 - 1)))
+                setattr(enemy, "hp", distorted_hp)
+                print(f"DEBUG: Distorting {enemy.name}'s hp to {distorted_hp} (was {base_hp})")
+
+            base_mp = getattr(enemy, "mp")
+            distorted_mp = int(max(1, min(base_mp * random.randint(self.args.boss_distort_stats_percent_min,
+                                                                   self.args.boss_distort_stats_percent_max) / 100.0,
+                                          2 ** 16 - 1)))
+            setattr(enemy, "mp", distorted_mp)
+            print(f"DEBUG: Distorting {enemy.name}'s mp to {distorted_mp} (was {base_mp})")'''
+    
+    def boss_hpmp_randomize(self):
+        import random
+        
+        # Exclude "child" bosses from HP distortion
+        hp_mp_exclude = [321, 322, 320, 319, 325, 327, 269, 316, 317, 318, 333, 294, 352, 353, 354, 288, 289, 359, 326,
+                         340]
+        hp_mp_parents = {
+            268: [321, 322],
+            267: [319, 320],
+            275: [325, 327],
+            270: [269],
+            283: [316, 317, 318],
+            259: [333],
+            291: [294, 352, 353, 354],
+            287: [288, 289],
+            290: [359]
+        }
+
+        # Create a reverse mapping of child to parent
+        child_to_parent = {child: parent for parent, children in hp_mp_parents.items() for child in children}
+
+        # Store distortion factors for parents
+        parent_distortion = {}
+
+        if self.args.boss_stats_random_percent_min != 100 or self.args.boss_stats_random_percent_max != 100:
+            # First Pass: Process all non-excluded bosses and parents
+            for enemy in self.bosses:
+                if enemy.id not in hp_mp_exclude:
+                    # Distort HP and MP for non-excluded enemies (including parents)
+                    base_hp = getattr(enemy, "hp")
+                    distorted_hp = int(max(1, min(base_hp * random.randint(self.args.boss_stats_random_percent_min,
+                                                                           self.args.boss_stats_random_percent_max) / 100.0,
+                                                  2 ** 16 - 1)))
+
+                    base_mp = getattr(enemy, "mp")
+                    distorted_mp = int(max(1, min(base_mp * random.randint(self.args.boss_stats_random_percent_min,
+                                                                           self.args.boss_stats_random_percent_max) / 100.0,
+                                                  2 ** 16 - 1)))
+
+                    # Store distortion factors for parent bosses
+                    if enemy.id in hp_mp_parents:
+                        hp_multiplier = distorted_hp / enemy.hp if enemy.hp > 0 else 1
+                        mp_multiplier = distorted_mp / enemy.mp if enemy.mp > 0 else 1
+                        parent_distortion[enemy.id] = (distorted_hp, hp_multiplier, distorted_mp, mp_multiplier)
+                        print(
+                            f"Parent {enemy.name} (ID {enemy.id}) distortion: HP x{hp_multiplier}, MP x{mp_multiplier}")
+
+                    # Apply distorted values
+                    print(
+                        f"DEBUG: {enemy.name}'s HP distorted to {distorted_hp} (was {enemy.hp}), MP distorted to {distorted_mp} (was {enemy.mp})")
+                    setattr(enemy, "hp", distorted_hp)
+                    setattr(enemy, "mp", distorted_mp)
+
+            # Second Pass: Process child bosses based on their parent's distortion
+            for enemy in self.bosses:
+                if enemy.id in hp_mp_exclude:
+                    parent_id = child_to_parent.get(enemy.id)
+                    # Exception case for Ipooh (sets his HP to always be 50% of Vargas's HP)
+                    if enemy.id == 333:
+                        if parent_id in parent_distortion:
+                            parent_distorted_hp = parent_distortion[parent_id][0]
+                            distorted_hp = int(parent_distorted_hp / 2)
+                            distorted_mp = enemy.mp  # Keep MP as is
+                            print(
+                                f"Special Case: Child {enemy.name} (ID {enemy.id}) HP set to 50% of parent's (ID {parent_id}) HP")
+
+                    elif parent_id in parent_distortion:
+                        _, hp_multiplier, _, mp_multiplier = parent_distortion[parent_id]
+                        distorted_hp = int(enemy.hp * hp_multiplier)
+                        distorted_mp = int(enemy.mp * mp_multiplier)
+                        print(
+                            f"Child {enemy.name} (ID {enemy.id}) inherits parent's (ID {parent_id}) distortion: HP x{hp_multiplier}, MP x{mp_multiplier}")
+                    else:
+                        distorted_hp, distorted_mp = enemy.hp, enemy.mp
+                        print(f"No HP adjustment applied on child enemy: {enemy.name} (ID {enemy.id})")
+
+                    # Apply distorted values
+                    setattr(enemy, "hp", distorted_hp)
+                    setattr(enemy, "mp", distorted_mp)
+                    print(f"DEBUG: {enemy.name}'s HP distorted to {distorted_hp}, MP distorted to {distorted_mp}")
 
     def skip_shuffling_zone(self, maps, zone):
         if zone.MAP and zone.id >= maps.MAP_COUNT:
-            return True # do not shuffle map zones that do not correspond to a map
+            return True  # do not shuffle map zones that do not correspond to a map
 
         if zone.MAP and not maps.properties[zone.id].enable_random_encounters:
-            return True # do not shuffle map zones with disabled random encounters
+            return True  # do not shuffle map zones with disabled random encounters
 
         return False
 
@@ -289,7 +516,7 @@ class Enemies():
                 packs.append(zone.packs[x])
 
         self.packs.chupon_packs(packs)
-        
+
     def randomize_encounters(self, maps):
         # find all packs that are randomly encountered in zones
         packs = []
@@ -366,8 +593,8 @@ class Enemies():
             enemy.no_scan = 0
 
     def mod(self, maps):
-        if self.args.boss_normalize_distort_stats:
-            self.boss_normalize_distort_stats()
+        '''if self.args.boss_rebalance_distort_stats:
+            self.boss_rebalance_distort_stats()'''
 
         if self.args.shuffle_steals_drops:
             self.shuffle_steals_drops_random()
@@ -376,6 +603,14 @@ class Enemies():
             self.remove_fenix_downs()
 
         self.apply_scaling()
+
+        if self.args.balance_boss_stats:
+            self.boss_rebalance_stats()
+            self.boss_rebalance_hpmp()
+
+        if self.args.boss_stats_random_percent:
+            self.boss_stats_randomize()
+            self.boss_hpmp_randomize()
 
         if self.args.boss_experience:
             self.boss_experience()

@@ -27,8 +27,11 @@ def parse(parser):
 
     bosses.add_argument("-srp3", "--shuffle-random-phunbaba3", action = "store_true",
                         help = "Apply Shuffle/Random to Phunbaba 3 (otherwise he will only appear in Mobliz WOR)")
-    bosses.add_argument("-bnds", "--boss-normalize-distort-stats", action = "store_true",
-                        help = "Normalize lower boss stats and apply random distortion")
+    bosses.add_argument("-bb", "--balance-boss-stats", action = "store_true",
+                        help = "Balance boss stats and hp/mp by adjusting low boss stats upwards"),
+    bosses.add_argument("-bsrp", "--boss-stats-random-percent", default = [100, 100], type = int,
+                        nargs = 2, metavar = ("MIN", "MAX"), choices = range(201),
+                        help="Sets boss stats to a random percent of current stats within given range"),
     bosses.add_argument("-be", "--boss-experience", action = "store_true",
                         help = "Boss battles award experience")
     bosses.add_argument("-bnu", "--boss-no-undead", action = "store_true",
@@ -46,6 +49,7 @@ def process(args):
         args.dragon_boss_location = BossLocations.SHUFFLE
     if vanilla_locations and args.statue_boss_location == BossLocations.MIX:
         args.statue_boss_location = BossLocations.SHUFFLE
+    args._process_min_max("boss_stats_random_percent")
 
 def flags(args):
     flags = ""
@@ -65,8 +69,10 @@ def flags(args):
 
     if args.shuffle_random_phunbaba3:
         flags += " -srp3"
-    if args.boss_normalize_distort_stats:
-        flags += " -bnds"
+    if args.balance_boss_stats:
+        flags += " -bb"
+    if args.boss_stats_random_percent_min != 100 or args.boss_stats_random_percent_max != 100:
+        flags += f" -bsrp {args.boss_stats_random_percent_min} {args.boss_stats_random_percent_max}"
     if args.boss_experience:
         flags += " -be"
     if args.boss_no_undead:
@@ -83,6 +89,8 @@ def options(args):
     elif args.boss_battles_random:
         boss_battles = "Random"
 
+    boss_stats_random_percent = f"{args.boss_stats_random_percent_min}-{args.boss_stats_random_percent_max}%"
+
     dragon_battles = DEFAULT_DRAGON_PROTOCOL
     if args.dragon_boss_location:
         dragon_battles = args.dragon_boss_location.capitalize()
@@ -96,7 +104,8 @@ def options(args):
         ("Dragons", dragon_battles, "dragon_battles"),
         ("Statues", statue_battles, "statue_battles"),
         ("Shuffle/Random Phunbaba 3", args.shuffle_random_phunbaba3, "shuffle_random_phunbaba3"),
-        ("Normalize & Distort Stats", args.boss_normalize_distort_stats, "boss_normalize_distort_stats"),
+        ("Balance Boss Stats", args.balance_boss_stats, "balance_boss_stats"),
+        ("Boss Stats", boss_stats_random_percent, "boss_stats_random_percent"),
         ("Boss Experience", args.boss_experience, "boss_experience"),
         ("No Undead", args.boss_no_undead, "boss_no_undead"),
         ("Marshal Keep Lobos", args.boss_marshal_keep_lobos, "boss_marshal_keep_lobos"),
