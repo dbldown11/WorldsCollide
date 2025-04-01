@@ -54,12 +54,6 @@ class PhantomTrain(Event):
             field.ReturnIfEventBitClear(event_bit.character_recruited(self.character_gate())),
         )
 
-        sabin_path = self.characters.get_character_path(self.characters.SABIN)
-        veldt_gate = self.events["Veldt"].character_gate()
-        if veldt_gate in sabin_path and self.args.shop_dried_meat == 1:
-            # sabin requires veldt gate character and there is only one dried meat in shops
-            # make sure it is not in the phantom train
-            self.shops.no_dried_meat_phantom_train()
 
     def _load_world_map(self):
         src = [
